@@ -9,6 +9,7 @@ from odrclone.api.router import create_api_router
 from odrclone.config import Settings
 from odrclone.database import Database
 from odrclone.downloads.manager import DownloadManager
+from odrclone.newznab import create_newznab_router
 from odrclone.providers.eyedex import EyeDexProvider
 from odrclone.providers.mmnt import MMNTProvider
 from odrclone.providers.odcrawler import ODCrawlerProvider
@@ -44,6 +45,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="OD-rclone", version="0.1.0")
     app.state.odrclone = state
     app.include_router(create_sabnzbd_router(state))
+    app.include_router(create_newznab_router(state))
     app.include_router(create_webui_router())
     app.include_router(create_api_router(state))
     app.include_router(create_webdav_router(catalog, cache, settings.auth))
