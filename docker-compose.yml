@@ -1,0 +1,24 @@
+services:
+  od-rclone:
+    build: .
+    container_name: od-rclone
+    restart: unless-stopped
+    ports:
+      - "8008:8008"
+    volumes:
+      - ./config.yml:/config/config.yml:ro
+      - ./data:/app/data
+      - ./cache:/cache
+      - ./downloads:/downloads
+
+  aria2:
+    image: p3terx/aria2-pro:latest
+    profiles: ["aria2"]
+    restart: unless-stopped
+    environment:
+      - RPC_SECRET=change-me
+    volumes:
+      - ./downloads:/downloads
+      - ./aria2:/config
+    ports:
+      - "6800:6800"

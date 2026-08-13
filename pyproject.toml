@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "od-rclone"
+version = "0.1.0"
+description = "Virtual open-directory filesystem, search bridge, WebDAV server, and Servarr companion"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "OD-rclone contributors"}]
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "httpx>=0.27",
+  "SQLAlchemy>=2.0",
+  "pydantic>=2.7",
+  "PyYAML>=6.0",
+  "beautifulsoup4>=4.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.6"]
+
+[project.scripts]
+od-rclone = "odrclone.main:run"
+
+[tool.setuptools.packages.find]
+include = ["odrclone*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110

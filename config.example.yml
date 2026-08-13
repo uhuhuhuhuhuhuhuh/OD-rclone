@@ -1,0 +1,45 @@
+bind: 0.0.0.0
+port: 8008
+database_url: sqlite:///./data/odrclone.db
+
+cache:
+  directory: ./data/cache
+  block_size: 8388608
+  read_ahead_blocks: 4
+  max_bytes: 107374182400
+  min_free_bytes: 5368709120
+  default_mode: TEMP
+downloads:
+  directory: ./data/downloads
+  backend: native       # native or aria2
+  aria2_rpc_url: http://127.0.0.1:6800/jsonrpc
+  aria2_secret: null
+  max_concurrent: 2
+odcrawler:
+  enabled: true
+  timeout_seconds: 20
+  max_results: 200
+eyedex:
+  enabled: true
+  timeout_seconds: 20
+  max_results: 200
+mmnt:
+  enabled: true
+  timeout_seconds: 20
+  max_results: 100
+  # Override search_url if MMNT changes its public search form.
+  search_url: https://www.mmnt.net
+sonarr:
+  enabled: false
+  url: http://127.0.0.1:8989
+  api_key: ""
+  import_mode: Move
+radarr:
+  enabled: false
+  url: http://127.0.0.1:7878
+  api_key: ""
+  import_mode: Move
+auth:
+  api_token: null
+  webdav_username: null
+  webdav_password: null
