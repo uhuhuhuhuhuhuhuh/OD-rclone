@@ -12,6 +12,7 @@ from odrclone.downloads.manager import DownloadManager
 from odrclone.providers.eyedex import EyeDexProvider
 from odrclone.providers.mmnt import MMNTProvider
 from odrclone.providers.odcrawler import ODCrawlerProvider
+from odrclone.sabnzbd import create_sabnzbd_router
 from odrclone.search.coordinator import SearchCoordinator
 from odrclone.servarr.client import ServarrClient
 from odrclone.vfs.cache import SparseCache
@@ -42,6 +43,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     state = AppState(settings=settings, db=db, catalog=catalog, cache=cache, search=SearchCoordinator(providers), downloads=DownloadManager(db, settings.downloads), servarr={"sonarr": ServarrClient(settings.sonarr, "sonarr"), "radarr": ServarrClient(settings.radarr, "radarr")})
     app = FastAPI(title="OD-rclone", version="0.1.0")
     app.state.odrclone = state
+    app.include_router(create_sabnzbd_router(state))
     app.include_router(create_webui_router())
     app.include_router(create_api_router(state))
     app.include_router(create_webdav_router(catalog, cache, settings.auth))
