@@ -5,13 +5,13 @@ database_url: sqlite:///./data/odrclone.db
 cache:
   directory: ./data/cache
   block_size: 8388608
-  read_ahead_blocks: 4
-  max_bytes: 107374182400
+  read_ahead_blocks: 0
+  max_bytes: 1073741824
   min_free_bytes: 5368709120
-  default_mode: TEMP
+  default_mode: REMOTE_ONLY
 downloads:
   directory: ./data/downloads
-  backend: native       # native or aria2
+  backend: native       # used only for explicit/manual full-download jobs; SAB grabs are virtual-only
   aria2_rpc_url: http://127.0.0.1:6800/jsonrpc
   aria2_secret: null
   max_concurrent: 2
