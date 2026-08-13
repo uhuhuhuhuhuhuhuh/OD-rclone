@@ -49,6 +49,7 @@ class SearchCoordinator:
                         return candidate
 
             merged = await asyncio.gather(*(validate(candidate) for candidate in merged))
+            merged = [candidate for candidate in merged if candidate.alive is not False]
 
         by_key: dict[tuple, Candidate] = {}
         for candidate in merged:
