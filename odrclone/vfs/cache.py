@@ -109,11 +109,20 @@ class SparseCache:
                     raise SourceUnavailable(f"HTTP {response.status_code}")
                 if start > 0 and response.status_code != 206:
                     raise SourceUnavailable("origin does not honor byte ranges")
+                content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                if content_type in {"text/html", "application/xhtml+xml"}:
+                    raise SourceUnavailable("origin returned HTML instead of media")
                 remaining = end - start + 1
                 with tmp.open("wb") as handle:
+                    first = True
                     async for chunk in response.aiter_bytes(256 * 1024):
                         if not chunk:
                             continue
+                        if first:
+                            first = False
+                            sample = chunk[:4096].lstrip(b"\xef\xbb\xbf\x00\t\r\n ").lower()
+                            if sample.startswith(b"<!doctype html") or sample.startswith(b"<html"):
+                                raise SourceUnavailable("origin returned HTML instead of media")
                         if len(chunk) > remaining:
                             chunk = chunk[:remaining]
                         handle.write(chunk)
@@ -125,6 +134,7 @@ class SparseCache:
     async def iter_range(self, vf: VirtualFile, start: int, end: int):
         first = start // self.block_size
         last = end // self.block_size
+        remote_only = vf.cache_mode.upper() == "REMOTE_ONLY"
         if vf.cache_mode.upper() in {"FULL_ON_PLAY", "PIN"} and start == 0:
             asyncio.create_task(self.prefetch_full(vf))
         for index in range(first, last + 1):
@@ -141,14 +151,14 @@ class SparseCache:
                         break
                     remaining -= len(chunk)
                     yield chunk
-            if vf.cache_mode.upper() == "REMOTE_ONLY":
-                self._block_path(vf.id, index).unlink(missing_ok=True)
+            if remote_only:
+                path.unlink(missing_ok=True)
                 with self.db.Session() as session:
                     row = session.scalar(select(CacheBlock).where(CacheBlock.virtual_file_id == vf.id, CacheBlock.block_index == index))
                     if row:
                         session.delete(row)
                         session.commit()
-            if index == first and self.read_ahead_blocks > 0:
+            elif index == first and self.read_ahead_blocks > 0:
                 for ahead in range(1, self.read_ahead_blocks + 1):
                     if vf.size is not None and (index + ahead) * self.block_size >= vf.size:
                         break
