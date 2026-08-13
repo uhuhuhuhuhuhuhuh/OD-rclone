@@ -72,7 +72,22 @@ def create_newznab_router(state):
 
         return xml_response(root)
 
-    def build_query(request: Request, mode: str) -> str:
+    def media_kind(request: Request, mode: str) -> str:
+        if mode == "movie":
+            return "movie"
+        if mode == "tvsearch":
+            return "tv"
+
+        category_ids = []
+        for raw in request.query_params.getlist("cat"):
+            category_ids.extend(part.strip() for part in raw.split(",") if part.strip())
+        if any(category.startswith("2") for category in category_ids):
+            return "movie"
+        if any(category.startswith("5") for category in category_ids):
+            return "tv"
+        return "tv"
+
+    def build_query(request: Request, mode: str, kind: str) -> str:
         params = request.query_params
         query = (params.get("q") or params.get("title") or "").strip()
         if mode == "tvsearch" and query:
@@ -82,6 +97,14 @@ def create_newznab_router(state):
                 query = f"{query} S{int(season):02d}E{int(episode):02d}"
             elif season and season.isdigit():
                 query = f"{query} S{int(season):02d}"
+
+        # Sonarr/Radarr validate a Newznab indexer by issuing a recent/RSS
+        # request with no q/title and require at least one parsed release.
+        # Our upstreams are search indexes rather than chronological RSS feeds,
+        # so use a broad, real provider-backed probe instead of returning an
+        # empty feed or inventing a synthetic release.
+        if not query:
+            query = "1080p" if kind == "movie" else "S01E01"
         return query
 
     def encode_candidate(candidate: Candidate) -> str:
@@ -96,7 +119,7 @@ def create_newznab_router(state):
         except Exception as exc:
             raise HTTPException(400, "invalid OD-rclone Newznab token") from exc
 
-    def feed_response(request: Request, mode: str, candidates: list[Candidate]) -> Response:
+    def feed_response(request: Request, kind: str, candidates: list[Candidate]) -> Response:
         rss = ET.Element("rss", {"version": "2.0"})
         channel = ET.SubElement(rss, "channel")
         ET.SubElement(channel, "title").text = "OD-rclone"
@@ -108,8 +131,8 @@ def create_newznab_router(state):
             {"offset": request.query_params.get("offset", "0"), "total": str(len(candidates))},
         )
 
-        category_id = "2000" if mode == "movie" else "5000"
-        category_name = "Movies" if mode == "movie" else "TV"
+        category_id = "2000" if kind == "movie" else "5000"
+        category_name = "Movies" if kind == "movie" else "TV"
         api_key = request.query_params.get("apikey") or ""
         now = format_datetime(datetime.now(timezone.utc))
 
@@ -160,9 +183,8 @@ def create_newznab_router(state):
         if mode not in {"search", "tvsearch", "movie"}:
             return error_response("202", f"No such function: {mode}")
 
-        query = build_query(request, mode)
-        if not query:
-            return feed_response(request, mode, [])
+        kind = media_kind(request, mode)
+        query = build_query(request, mode, kind)
 
         try:
             limit = max(1, min(int(request.query_params.get("limit", "100")), 100))
@@ -173,12 +195,12 @@ def create_newznab_router(state):
         result = await state.search.search(
             SearchRequest(
                 query=query,
-                media_type="movie" if mode == "movie" else "tv",
+                media_type=kind,
                 extensions=extensions,
                 limit=limit,
             )
         )
-        return feed_response(request, mode, result.results)
+        return feed_response(request, kind, result.results)
 
     @router.get("/download/{token}")
     async def download_nzb(token: str, request: Request):
