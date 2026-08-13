@@ -11,6 +11,11 @@ from odrclone.database import Database, DownloadJob
 from odrclone.net import ftp_download
 
 
+def _looks_like_html(data: bytes) -> bool:
+    sample = data[:4096].lstrip(b"\xef\xbb\xbf\x00\t\r\n ").lower()
+    return sample.startswith(b"<!doctype html") or sample.startswith(b"<html")
+
+
 class NativeDownloader:
     def __init__(self, db: Database, max_concurrent: int = 2):
         self.db = db
@@ -63,6 +68,7 @@ class NativeDownloader:
                         session.commit()
                 raise
             except Exception as exc:
+                part.unlink(missing_ok=True)
                 with self.db.Session() as session:
                     row = session.get(DownloadJob, job_id)
                     if row:
@@ -79,6 +85,9 @@ class NativeDownloader:
             async with client.stream("GET", url, headers=headers) as response:
                 if response.status_code >= 400:
                     raise RuntimeError(f"HTTP {response.status_code}")
+                content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                if content_type in {"text/html", "application/xhtml+xml"}:
+                    raise RuntimeError(f"remote source returned HTML instead of media ({content_type})")
                 if resume and response.status_code != 206:
                     resume = 0
                     done = 0
@@ -90,8 +99,13 @@ class NativeDownloader:
                 elif response.headers.get("content-length", "").isdigit():
                     total = int(response.headers["content-length"]) + resume
                 mode = "ab" if resume else "wb"
+                first_payload = resume == 0
                 with part.open(mode) as handle:
                     async for chunk in response.aiter_bytes(1024 * 1024):
+                        if first_payload:
+                            first_payload = False
+                            if _looks_like_html(chunk):
+                                raise RuntimeError("remote source returned HTML instead of media")
                         handle.write(chunk)
                         done += len(chunk)
                         elapsed = max(time.monotonic() - started, 0.01)
