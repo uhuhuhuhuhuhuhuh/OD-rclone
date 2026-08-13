@@ -6,7 +6,7 @@ OD-rclone is a cross-platform virtual-file bridge for public/open-directory sear
 
 ## Current status
 
-The initial release implements the core architecture:
+The initial release implements a working core architecture:
 
 - ODCrawler structured search adapter
 - EyeDex HTML search adapter
@@ -15,18 +15,21 @@ The initial release implements the core architecture:
 - persistent SQLite virtual-file catalog
 - multiple source URLs per virtual file
 - HTTP `HEAD` and single-byte-range streaming
-- sparse on-disk block cache with read-ahead
+- HTTP/HTTPS and FTP/FTPS source validation
+- sparse on-disk block cache with read-ahead and size limits
+- `REMOTE_ONLY`, `TEMP`, `FULL_ON_PLAY`, and `PIN` cache behavior
 - read-only WebDAV (`PROPFIND`, `GET`, `HEAD`, `OPTIONS`)
 - rclone-compatible WebDAV mount path
-- native resumable HTTP downloader
+- native resumable HTTP/FTP downloader
 - optional aria2 JSON-RPC downloader
-- Sonarr/Radarr v3 status, missing-items and downloaded-scan bridge
+- Sonarr/Radarr v3 status, missing-items, autofill matching, and downloaded-scan bridge
 - browser search/virtual-file/download UI
 - Windows/Linux helper scripts
 - Docker and Docker Compose
 - Windows/Linux CI plus multi-architecture Docker build validation
+- tag-triggered Windows/Linux executable builds and GHCR multi-architecture image publishing
 
-Advanced source equivalence hashing, automatic Servarr wanted-item matching, full cache eviction policy enforcement, FTP random-access caching, native packaged executables and automatic container publishing are planned follow-ups.
+Strong cross-source equivalence hashing, richer host-speed scoring, multi-range HTTP responses, and seamless verified byte-level mirror switching remain follow-up work.
 
 ## Quick start: Linux
 
@@ -59,17 +62,17 @@ cp config.example.yml config.yml
 docker compose up -d --build
 ```
 
-The Web UI and API are exposed on port `8008`.
+The Web UI and API are exposed on port `8008`. Tagged releases also publish `ghcr.io/uhuhuhuhuhuhuhuh/od-rclone` for `linux/amd64` and `linux/arm64`.
 
 ## Virtual files
 
-Search results are not exposed directly as raw origin URLs. A result can be added to a stable virtual path such as:
+Search results can be assigned stable paths such as:
 
 ```text
 /TV/The Mentalist/Season 03/The Mentalist - S03E07.mkv
 ```
 
-The catalog stores one or more source URLs behind that path. HTTP clients see the virtual file. OD-rclone can cache only the byte blocks a client actually reads.
+The catalog stores one or more source URLs behind that path. WebDAV, rclone and Plex see the virtual path instead of needing to know which origin currently backs it.
 
 ## Plex / rclone
 
@@ -83,109 +86,83 @@ rclone config
   Vendor: other
 ```
 
-Linux example:
+Linux:
 
 ```bash
 mkdir -p /mnt/odrclone
 rclone mount odrclone: /mnt/odrclone --read-only --vfs-cache-mode off
 ```
 
-Windows example:
+Windows:
 
 ```powershell
 rclone mount odrclone: X: --read-only
 ```
 
-Then point a Plex library at `/mnt/odrclone/TV`, `/mnt/odrclone/Movies`, or the equivalent Windows drive. OD-rclone itself provides the sparse media cache, so a second full rclone VFS cache is generally unnecessary for read-only playback.
+Point Plex at `/mnt/odrclone/TV`, `/mnt/odrclone/Movies`, or the equivalent Windows drive. A normal probe does not intentionally download the entire object. OD-rclone fetches fixed-size blocks corresponding to requested byte ranges and can read ahead without allocating the full virtual file.
 
-### Plex-oriented behavior
-
-A normal library probe does not automatically download the complete object. Reads are satisfied by byte range and stored as fixed-size cache blocks. A seek to the end of a large file therefore fetches the requested end blocks rather than the bytes before them, provided the origin honors HTTP ranges.
-
-## API examples
+## API
 
 Search:
 
 ```bash
 curl -X POST http://localhost:8008/api/search \
   -H 'Content-Type: application/json' \
-  -d '{"query":"Example S01E01","extensions":["mkv","mp4"],"validate":false}'
+  -d '{"query":"Example S01E01","extensions":["mkv","mp4"],"validate":true}'
 ```
 
-Add a search result as a virtual file:
+Important routes:
 
 ```text
-POST /api/virtualize
-```
-
-List virtual files:
-
-```text
-GET /api/files
-```
-
-Stream a virtual path:
-
-```text
-GET /api/stream/Virtual/example.mkv
-Range: bytes=0-1048575
+POST   /api/search
+POST   /api/virtualize
+GET    /api/files
+GET    /api/files/{id}
+DELETE /api/files/{id}/cache
+POST   /api/downloads
+GET    /api/downloads
+GET    /api/stream/{virtual-path}
+GET    /api/servarr/{sonarr|radarr}/missing
+POST   /api/servarr/{sonarr|radarr}/autofill
+POST   /api/servarr/{sonarr|radarr}/scan
 ```
 
 ## Sonarr / Radarr
 
-Set each endpoint and API key in `config.yml`.
-
-OD-rclone uses the v3 API and can call the supported downloaded-scan commands after a file has been completed into a directory visible to the corresponding Servarr instance.
-
-```text
-POST /api/servarr/sonarr/scan
-POST /api/servarr/radarr/scan
-```
-
-Example body:
-
-```json
-{
-  "path": "/downloads/od-rclone/job-123",
-  "download_client_id": "od-rclone",
-  "import_mode": "Move"
-}
-```
+Set each URL and API key in `config.yml`. OD-rclone can query missing items, derive title/season/episode or movie/year searches, virtualize the best candidate, download it, and issue the corresponding downloaded-scan command after completion.
 
 Sonarr command: `DownloadedEpisodesScan`  
 Radarr command: `DownloadedMoviesScan`
 
-## Provider notes
+This is a companion bridge rather than a patched Sonarr/Radarr build, so it does not appear as a new native download-client type inside their built-in provider menus.
+
+## Providers
 
 ### ODCrawler
 
-Uses the structured Elasticsearch-compatible endpoint captured from the public frontend. Extension filtering is done locally so OD-rclone does not depend on the frontend's generated `must_not` clauses.
+Uses the structured search endpoint captured from the public frontend. Extension filtering is intentionally done locally rather than reproducing the frontend's generated `must_not` clauses. The optional public link-alive endpoint is used as a first-pass health signal.
 
 ### EyeDex
 
-Uses `GET /search/?q=...&t=...` and parses direct external result links and available row metadata.
+Uses `GET /search/?q=...&t=...` and parses external result links plus row metadata such as displayed size when available.
 
 ### MMNT
 
-MMNT is primarily a browsable FTP index and its search form has changed over time. The adapter is intentionally isolated and `mmnt.search_url` is configurable. This prevents an MMNT frontend change from breaking the VFS or the other providers.
+MMNT is primarily a browsable FTP index and its search form has changed over time. The adapter is isolated and `mmnt.search_url` is configurable. FTP/FTPS targets themselves support validation, resumed downloading, and ranged cache reads when the server supports `REST`.
 
-## Cache layout
+## Cache
 
-Default block size: 8 MiB.
+Default block size is 8 MiB:
 
 ```text
 data/cache/<virtual-file-id>/<block-index>.blk
 ```
 
-The SQLite catalog records cached blocks and source metadata. Cache clearing is available through:
-
-```text
-DELETE /api/files/{id}/cache
-```
+The cache supports read-ahead, maximum-size/minimum-free-space enforcement, manual clearing, pinning, full-on-play prefetch and remote-only reads.
 
 ## Security
 
-The API can be protected with `auth.api_token`. Remote source URLs are currently visible to authenticated API callers and the local Web UI because they are useful for diagnostics; they are not exposed through WebDAV or normal virtual streaming URLs. Bind to localhost or a trusted LAN unless you configure a reverse proxy/authentication appropriate for your environment.
+The REST API can be protected with `auth.api_token` and WebDAV can use Basic credentials. Source URLs are not exposed through normal WebDAV paths or virtual stream URLs. Bind to localhost or a trusted LAN unless you configure appropriate authentication/reverse-proxy controls.
 
 ## Architecture
 
@@ -194,5 +171,5 @@ EyeDex ─┐
 ODCrawler ─┼─> Search coordinator -> virtual catalog -> sparse cache -> HTTP/WebDAV -> rclone/Plex
 MMNT ───┘                              │
                                       ├-> native/aria2 downloads
-                                      └-> Sonarr/Radarr downloaded scans
+                                      └-> Sonarr/Radarr missing/import bridge
 ```
