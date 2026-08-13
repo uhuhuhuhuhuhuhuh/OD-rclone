@@ -9,7 +9,10 @@ from xml.etree import ElementTree as ET
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from odrclone.database import DownloadJob
 from odrclone.schemas import Candidate
+from odrclone.search.media_parser import parse_media_name
+from odrclone.servarr.automation import safe_component
 
 
 SAB_VERSION = "5.0.4"
@@ -184,6 +187,51 @@ def create_sabnzbd_router(state):
         except Exception as exc:
             raise ValueError("invalid OD-rclone candidate metadata") from exc
 
+    def virtual_path_for(candidate: Candidate, media_type: str) -> str:
+        filename = Path(candidate.filename).name
+        stem = Path(filename).stem
+        normalized = re.sub(r"[._]+", " ", stem).strip()
+        parsed = parse_media_name(filename)
+
+        if media_type == "movie":
+            title = normalized
+            if parsed.year:
+                marker = re.search(rf"\b{parsed.year}\b", normalized)
+                if marker:
+                    title = normalized[: marker.start()].strip(" -._")
+            title = safe_component(title or stem)
+            folder = f"{title} ({parsed.year})" if parsed.year else title
+            return f"/Movies/{folder}/{filename}"
+
+        episode = re.search(r"(?i)\bS\d{1,2}E\d{1,3}\b|\b\d{1,2}x\d{1,3}\b", normalized)
+        title = normalized[: episode.start()].strip(" -._") if episode else normalized
+        title = safe_component(title or stem)
+        season = parsed.season if parsed.season is not None else 0
+        return f"/TV/{title}/Season {season:02d}/{filename}"
+
+    def create_virtual_job(vf, candidate: Candidate, category: str) -> DownloadJob:
+        # SAB/Radarr/Sonarr need a queue/history identifier, but virtual-only
+        # grabs must not write the media file to local disk. target_path is a
+        # logical SAB completion path used only for category reporting.
+        logical_root = Path(state.settings.downloads.directory)
+        logical_target = logical_root / (category or "uncategorized") / candidate.filename
+        total = int(candidate.size or vf.size or 0)
+        with state.db.Session() as session:
+            job = DownloadJob(
+                virtual_file_id=vf.id,
+                filename=candidate.filename,
+                url=candidate.url,
+                target_path=str(logical_target),
+                status="complete",
+                bytes_total=total or None,
+                bytes_done=total,
+                speed_bps=0.0,
+            )
+            session.add(job)
+            session.commit()
+            session.refresh(job)
+            return job
+
     async def addfile(request: Request):
         try:
             form = await request.form()
@@ -204,36 +252,40 @@ def create_sabnzbd_router(state):
                 status_code=400,
             )
 
-        category = clean_category(request.query_params.get("cat"))
-        media_type = "movie" if category in {"movies", "radarr"} else "tv"
-        virtual_category = category or "uncategorized"
-        virtual_path = f"/Downloads/{virtual_category}/{candidate.filename}"
+        provider = state.search.providers.get(candidate.provider)
+        if provider is not None:
+            try:
+                candidate = await provider.validate(candidate)
+            except Exception as exc:
+                return JSONResponse(
+                    {"status": False, "error": f"Unable to validate remote source: {exc}"},
+                    status_code=400,
+                )
+        if candidate.alive is False:
+            return JSONResponse(
+                {"status": False, "error": "Remote source is dead or is not a media file"},
+                status_code=400,
+            )
 
-        vf = state.catalog.add_candidate(candidate, virtual_path, media_type)
+        category = clean_category(request.query_params.get("cat"))
+        media_type = "movie" if category.lower() in {"movies", "radarr", "movie"} else "tv"
+        virtual_path = virtual_path_for(candidate, media_type)
+
+        # This is the key storage-free behavior: register a remote-backed file
+        # in WebDAV using REMOTE_ONLY. Do not invoke DownloadManager.create().
+        vf = state.catalog.add_candidate(
+            candidate,
+            virtual_path=virtual_path,
+            media_type=media_type,
+            cache_mode="REMOTE_ONLY",
+        )
         if not vf.sources:
             return JSONResponse(
                 {"status": False, "error": "No usable source was attached to the virtual release"},
                 status_code=400,
             )
 
-        source = sorted(
-            vf.sources,
-            key=lambda item: (item.alive is True, item.score),
-            reverse=True,
-        )[0]
-        target_dir = Path(state.settings.downloads.directory)
-        if category:
-            target_dir = target_dir / category
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-        try:
-            job = await state.downloads.create(vf, source, str(target_dir))
-        except Exception as exc:
-            return JSONResponse(
-                {"status": False, "error": f"Unable to create OD-rclone download job: {exc}"},
-                status_code=500,
-            )
-
+        job = create_virtual_job(vf, candidate, category)
         return {"status": True, "nzo_ids": [job_id(job)]}
 
     @router.api_route("/api", methods=["GET", "POST"])
