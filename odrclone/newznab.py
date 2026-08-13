@@ -197,6 +197,7 @@ def create_newznab_router(state):
                 query=query,
                 media_type=kind,
                 extensions=extensions,
+                validate_results=True,
                 limit=limit,
             )
         )
